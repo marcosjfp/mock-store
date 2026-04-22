@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: store-postgres
+    environment:
+      POSTGRES_USER: store_user
+      POSTGRES_PASSWORD: store_pass
+      POSTGRES_DB: store_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U store_user -d store_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: store-redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: store-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  backend:
+    build:
+      context: ./backend
+    container_name: store-backend
+    environment:
+      SECRET_KEY: super-secret-change-me
+      DATABASE_URL: postgresql+asyncpg://store_user:store_pass@postgres:5432/store_db
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_QUEUE: order.created
+      REDIS_ENABLED: "true"
+      RABBITMQ_ENABLED: "true"
+      CORS_ORIGINS: '["http://localhost:5173"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+
+  worker:
+    build:
+      context: ./backend
+    container_name: store-worker
+    command: ["python", "-m", "app.workers.order_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://store_user:store_pass@postgres:5432/store_db
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_QUEUE: order.created
+      REDIS_ENABLED: "true"
+      RABBITMQ_ENABLED: "true"
+      SECRET_KEY: super-secret-change-me
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: store-frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
