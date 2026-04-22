@@ -145,7 +145,7 @@ alembic revision -m "your change name"
 6. Verify RBAC boundaries with role-specific logins.
 7. Extend with pagination and audit logs.
 
-## 8. Suggested Next Enhancements
+## 8. Next Enhancements (Probaly)
 
 - Soft deletes and full audit trail.
 - Background email/Slack notification service.
