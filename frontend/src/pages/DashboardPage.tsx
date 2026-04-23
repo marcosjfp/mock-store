@@ -49,11 +49,26 @@ export default function DashboardPage({ auth, onLogout }: DashboardPageProps) {
       setOrders(ordersData);
       setInventoryByProduct(Object.fromEntries(inventoryPairs));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load data");
+      const message = loadError instanceof Error ? loadError.message : "Failed to load data";
+      const shouldResetAuth = [
+        "Invalid token",
+        "Invalid access token",
+        "User not found",
+        "Tenant mismatch",
+        "Tenant not found",
+        "Token role out of date",
+      ].includes(message);
+
+      if (shouldResetAuth) {
+        onLogout();
+        return;
+      }
+
+      setError(message);
     } finally {
       setLoading(false);
     }
-  }, [auth.accessToken, auth.tenantSlug]);
+  }, [auth.accessToken, auth.tenantSlug, onLogout]);
 
   useEffect(() => {
     void loadData();

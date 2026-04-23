@@ -93,9 +93,12 @@ python scripts/seed_demo.py
 
 Seeded tenant credentials:
 
+- tenant slug: `rail-byte-demo`
 - owner: `owner@railbyte.com` / `StrongPass123!`
 - manager: `manager@railbyte.com` / `StrongPass123!`
 - staff: `staff@railbyte.com` / `StrongPass123!`
+
+Seeded catalog now includes a richer computer-parts dataset (CPU/GPU/RAM/SSD/PSU/case/cooling/network components), inventory levels, and sample orders so you can explore product, stock, and order flows immediately.
 
 ### Frontend Local
 

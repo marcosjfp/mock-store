@@ -41,6 +41,48 @@ export type Order = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+type ApiErrorValidation = {
+  msg?: string;
+};
+
+function normalizeTenantSlug(tenantSlug: string): string {
+  return tenantSlug.trim().toLowerCase();
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function parseApiError(body: unknown): string | null {
+  if (typeof body === "object" && body !== null) {
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim().length > 0) {
+      return detail;
+    }
+
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((entry) => {
+          if (typeof entry === "string") {
+            return entry.trim();
+          }
+          if (typeof entry === "object" && entry !== null) {
+            const msg = (entry as ApiErrorValidation).msg;
+            return typeof msg === "string" ? msg.trim() : "";
+          }
+          return "";
+        })
+        .filter((msg) => msg.length > 0);
+
+      if (messages.length > 0) {
+        return messages.join(". ");
+      }
+    }
+  }
+
+  return null;
+}
+
 export function buildHeaders(tenantSlug: string, accessToken?: string): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -59,22 +101,27 @@ async function request<T>(
   tenantSlug: string,
   accessToken?: string
 ): Promise<T> {
+  const normalizedTenantSlug = normalizeTenantSlug(tenantSlug);
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      ...buildHeaders(tenantSlug, accessToken),
+      ...buildHeaders(normalizedTenantSlug, accessToken),
       ...(options.headers ?? {}),
     },
   });
 
   if (!response.ok) {
     const fallback = `Request failed with status ${response.status}`;
+    let parsedError: string | null = null;
+
     try {
       const body = await response.json();
-      throw new Error(body.detail ?? fallback);
+      parsedError = parseApiError(body);
     } catch {
-      throw new Error(fallback);
+      parsedError = null;
     }
+
+    throw new Error(parsedError ?? fallback);
   }
 
   if (response.status === 204) {
@@ -89,24 +136,37 @@ export function register(data: {
   email: string;
   password: string;
 }): Promise<TokenPair> {
+  const payload = {
+    tenant_name: data.tenant_name.trim(),
+    tenant_slug: normalizeTenantSlug(data.tenant_slug),
+    email: normalizeEmail(data.email),
+    password: data.password,
+  };
+
   return request<TokenPair>(
     "/auth/register",
     {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     },
-    data.tenant_slug
+    payload.tenant_slug
   );
 }
 
 export function login(data: { tenant_slug: string; email: string; password: string }): Promise<TokenPair> {
+  const payload = {
+    tenant_slug: normalizeTenantSlug(data.tenant_slug),
+    email: normalizeEmail(data.email),
+    password: data.password,
+  };
+
   return request<TokenPair>(
     "/auth/login",
     {
       method: "POST",
-      body: JSON.stringify({ email: data.email, password: data.password }),
+      body: JSON.stringify({ email: payload.email, password: payload.password }),
     },
-    data.tenant_slug
+    payload.tenant_slug
   );
 }
 

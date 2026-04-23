@@ -45,3 +45,30 @@ async def test_register_me_refresh_rotation(
         headers={"X-Tenant-Slug": "acme"},
     )
     assert revoked_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_normalizes_tenant_slug_and_email(client: AsyncClient):
+    await client.post(
+        "/api/v1/auth/register",
+        json={
+            "tenant_name": "Normalization Labs",
+            "tenant_slug": "norm-labs",
+            "email": "owner@normlabs.com",
+            "password": "StrongPass123!",
+        },
+    )
+
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "OWNER@NORMLABS.COM",
+            "password": "StrongPass123!",
+        },
+        headers={"X-Tenant-Slug": "  NORM-LABS  "},
+    )
+
+    assert login_response.status_code == 200
+    body = login_response.json()
+    assert body["access_token"]
+    assert body["refresh_token"]

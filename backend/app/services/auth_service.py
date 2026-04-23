@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import cache_client
@@ -24,13 +24,24 @@ def _refresh_key(tenant_id: str, user_id: str, token_id: str) -> str:
     return f"refresh:{tenant_id}:{user_id}:{token_id}"
 
 
+def _normalize_tenant_slug(tenant_slug: str) -> str:
+    return tenant_slug.strip().lower()
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 async def register_tenant_owner(
     db: AsyncSession,
     payload: RegisterRequest,
 ) -> tuple[models.Tenant, models.User]:
+    normalized_tenant_slug = _normalize_tenant_slug(payload.tenant_slug)
+    normalized_email = _normalize_email(payload.email)
+
     existing_tenant = await db.scalar(
         select(models.Tenant).where(
-            models.Tenant.slug == payload.tenant_slug
+            models.Tenant.slug == normalized_tenant_slug
         )
     )
     if existing_tenant is not None:
@@ -39,10 +50,13 @@ async def register_tenant_owner(
             detail="Tenant slug already exists",
         )
 
-    tenant = models.Tenant(name=payload.tenant_name, slug=payload.tenant_slug)
+    tenant = models.Tenant(
+        name=payload.tenant_name.strip(),
+        slug=normalized_tenant_slug,
+    )
     user = models.User(
         tenant=tenant,
-        email=payload.email,
+        email=normalized_email,
         hashed_password=hash_password(payload.password),
         role=models.UserRole.OWNER.value,
     )
@@ -58,8 +72,11 @@ async def authenticate_user(
     tenant_slug: str,
     payload: LoginRequest,
 ) -> tuple[models.Tenant, models.User]:
+    normalized_tenant_slug = _normalize_tenant_slug(tenant_slug)
+    normalized_email = _normalize_email(payload.email)
+
     tenant = await db.scalar(
-        select(models.Tenant).where(models.Tenant.slug == tenant_slug)
+        select(models.Tenant).where(models.Tenant.slug == normalized_tenant_slug)
     )
     if tenant is None:
         raise HTTPException(
@@ -69,11 +86,15 @@ async def authenticate_user(
 
     stmt = select(models.User).where(
         models.User.tenant_id == tenant.id,
-        models.User.email == payload.email,
+        func.lower(models.User.email) == normalized_email,
     )
     user = await db.scalar(stmt)
 
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.hashed_password)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -158,10 +179,12 @@ async def create_tenant_member(
     tenant_id: str,
     payload: CreateTenantMemberRequest,
 ) -> models.User:
+    normalized_email = _normalize_email(payload.email)
+
     existing_user = await db.scalar(
         select(models.User).where(
             models.User.tenant_id == tenant_id,
-            models.User.email == payload.email,
+            func.lower(models.User.email) == normalized_email,
         )
     )
     if existing_user is not None:
@@ -172,7 +195,7 @@ async def create_tenant_member(
 
     user = models.User(
         tenant_id=tenant_id,
-        email=payload.email,
+        email=normalized_email,
         hashed_password=hash_password(payload.password),
         role=payload.role,
     )
