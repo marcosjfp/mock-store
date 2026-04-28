@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -20,17 +21,21 @@ def _load_dependencies():
     return hash_password, models, AsyncSessionLocal
 
 
+DEMO_TENANT_SLUG = os.getenv("DEMO_TENANT_SLUG", "rail-byte")
+DEMO_TENANT_NAME = os.getenv("DEMO_TENANT_NAME", "Rail Byte Components")
+
+
 async def seed_demo_data() -> None:
     hash_password, models, AsyncSessionLocal = _load_dependencies()
 
     async with AsyncSessionLocal() as db:
         tenant = await db.scalar(
-            select(models.Tenant).where(models.Tenant.slug == "rail-byte-demo")
+            select(models.Tenant).where(models.Tenant.slug == DEMO_TENANT_SLUG)
         )
         if tenant is None:
             tenant = models.Tenant(
-                name="Rail Byte Components",
-                slug="rail-byte-demo",
+                name=DEMO_TENANT_NAME,
+                slug=DEMO_TENANT_SLUG,
             )
             db.add(tenant)
             await db.flush()
