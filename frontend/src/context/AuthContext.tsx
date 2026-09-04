@@ -1,5 +1,6 @@
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
+import { configureAuthRefresh, refreshToken } from "../api/client";
 import { getRoleFromAccessToken } from "../auth/jwt";
 import { UserRole } from "../auth/roles";
 
@@ -45,6 +46,33 @@ function loadInitialAuth(): AuthState | null {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [auth, setAuthState] = useState<AuthState | null>(loadInitialAuth);
+
+  useEffect(() => {
+    configureAuthRefresh(async () => {
+      if (!auth) {
+        return null;
+      }
+
+      try {
+        const tokens = await refreshToken(auth.tenantSlug, auth.refreshToken);
+        const nextAuth: AuthState = {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          tenantSlug: auth.tenantSlug,
+          role: getRoleFromAccessToken(tokens.access_token),
+        };
+        setAuthState(nextAuth);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextAuth));
+        return nextAuth.accessToken;
+      } catch {
+        setAuthState(null);
+        localStorage.removeItem(STORAGE_KEY);
+        return null;
+      }
+    });
+
+    return () => configureAuthRefresh(null);
+  }, [auth]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

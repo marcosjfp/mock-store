@@ -45,3 +45,15 @@ async def test_register_me_refresh_rotation(
         headers={"X-Tenant-Slug": "acme"},
     )
     assert revoked_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_refresh_token_returns_unauthorized(client: AsyncClient):
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        headers={"X-Tenant-Slug": "acme"},
+        json={"refresh_token": "not-a-jwt"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"

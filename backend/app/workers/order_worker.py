@@ -9,6 +9,9 @@ from app.core.config import get_settings
 
 async def run_order_notification_worker() -> None:
     settings = get_settings()
+    if not settings.RABBITMQ_ENABLED:
+        return
+
     await cache_client.connect()
 
     connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)

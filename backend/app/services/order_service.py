@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -8,6 +9,8 @@ from sqlalchemy.orm import selectinload
 from app.core.messaging import publisher
 from app.db import models
 from app.schemas.order import OrderCreate
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_item(item: models.OrderItem) -> dict:
@@ -94,10 +97,12 @@ async def create_order(
 
     inventories = (
         await db.scalars(
-            select(models.Inventory).where(
+            select(models.Inventory)
+            .where(
                 models.Inventory.tenant_id == tenant_id,
                 models.Inventory.product_id.in_(product_ids),
             )
+            .with_for_update()
         )
     ).all()
     inventory_by_product_id = {
@@ -142,13 +147,16 @@ async def create_order(
     await db.commit()
 
     created = await get_order(db, tenant_id, order.id)
-    await publisher.publish_order_created(
-        {
-            "event": "order.created",
-            "tenant_id": tenant_id,
-            "order_id": order.id,
-            "created_by_user_id": user_id,
-            "total_amount": float(total),
-        }
-    )
+    try:
+        await publisher.publish_order_created(
+            {
+                "event": "order.created",
+                "tenant_id": tenant_id,
+                "order_id": order.id,
+                "created_by_user_id": user_id,
+                "total_amount": float(total),
+            }
+        )
+    except Exception:
+        logger.exception("Failed to publish order.created for order %s", order.id)
     return created

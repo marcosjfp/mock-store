@@ -73,7 +73,11 @@ async def authenticate_user(
     )
     user = await db.scalar(stmt)
 
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.hashed_password)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -111,7 +115,13 @@ async def refresh_token_pair(
     refresh_token: str,
     tenant_slug: str,
 ) -> TokenPair:
-    payload = decode_token(refresh_token)
+    try:
+        payload = decode_token(refresh_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        ) from exc
     if payload.get("typ") != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -143,7 +153,7 @@ async def refresh_token_pair(
             models.User.tenant_id == tenant_id,
         )
     )
-    if user is None:
+    if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",

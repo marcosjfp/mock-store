@@ -40,6 +40,14 @@ export type Order = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+type AuthRefreshHandler = () => Promise<string | null>;
+
+let authRefreshHandler: AuthRefreshHandler | null = null;
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function configureAuthRefresh(handler: AuthRefreshHandler | null): void {
+  authRefreshHandler = handler;
+}
 
 export function buildHeaders(tenantSlug: string, accessToken?: string): HeadersInit {
   const headers: Record<string, string> = {
@@ -57,7 +65,8 @@ async function request<T>(
   path: string,
   options: RequestInit,
   tenantSlug: string,
-  accessToken?: string
+  accessToken?: string,
+  allowRefresh = true
 ): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -68,13 +77,44 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    const fallback = `Request failed with status ${response.status}`;
-    try {
-      const body = await response.json();
-      throw new Error(body.detail ?? fallback);
-    } catch {
-      throw new Error(fallback);
+    if (response.status === 401 && accessToken && authRefreshHandler && allowRefresh) {
+      refreshInFlight ??= authRefreshHandler().finally(() => {
+        refreshInFlight = null;
+      });
+      const refreshedAccessToken = await refreshInFlight;
+      if (refreshedAccessToken) {
+        return request<T>(path, options, tenantSlug, refreshedAccessToken, false);
+      }
     }
+
+    const fallback = `Request failed with status ${response.status}`;
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+
+    if (typeof body === "object" && body !== null && "detail" in body) {
+      const detail = body.detail;
+      if (typeof detail === "string") {
+        throw new Error(detail);
+      }
+      if (Array.isArray(detail)) {
+        const messages = detail
+          .map((item) => {
+            if (typeof item === "object" && item !== null && "msg" in item) {
+              return typeof item.msg === "string" ? item.msg : null;
+            }
+            return null;
+          })
+          .filter((message): message is string => message !== null);
+        if (messages.length > 0) {
+          throw new Error(messages.join("; "));
+        }
+      }
+    }
+    throw new Error(fallback);
   }
 
   if (response.status === 204) {

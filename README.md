@@ -78,7 +78,10 @@ Services:
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# Windows cmd: .venv\Scripts\activate.bat
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
