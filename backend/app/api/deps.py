@@ -63,7 +63,7 @@ async def get_current_user(
             models.User.tenant_id == tenant.id,
         )
     )
-    if user is None:
+    if user is None or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",

@@ -83,6 +83,8 @@ if ($runApps) {
     Push-Location (Join-Path $root "backend")
     try {
         & $venvPython -m alembic upgrade head
+        Write-Host "[setup] Seeding demo workspace (skipped if it already has data)..."
+        & $venvPython scripts/seed_demo.py
     }
     finally {
         Pop-Location

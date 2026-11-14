@@ -1,152 +1,215 @@
-# Multi-tenant SaaS Order/Inventory Manager Blueprint
+# StoreOps — multi-tenant order & inventory manager
 
-This project is a training-ready blueprint for a **multi-tenant computer parts store** that uses a modern production stack:
+A back office for stores that sell computer hardware: live stock, order
+fulfilment, sales analytics, team roles and a full audit trail — one isolated
+workspace per store.
 
-- FastAPI (async API)
-- SQLAlchemy 2.0 (ORM)
-- PostgreSQL (scalable relational DB)
-- JWT access + refresh tokens
-- Role-based access control (owner, manager, staff)
-- CRUD for products, inventory, and orders
-- Redis (cache + refresh session storage)
-- RabbitMQ (async order events)
-- React + TypeScript frontend
-- Testing with pytest/httpx and Vitest
-- Alembic migrations + demo seed script
-- Docker Compose for full local stack
+**FastAPI · SQLAlchemy 2 (async) · PostgreSQL · Redis · RabbitMQ · React 18 · TypeScript · TanStack Query**
 
-## 1. Architecture Overview
+![Overview dashboard](docs/screenshots/overview.jpg)
 
-### Backend
+| Sign in | Order detail | Catalog (dark) |
+| --- | --- | --- |
+| ![Sign in](docs/screenshots/sign-in.jpg) | ![Order drawer](docs/screenshots/order.jpg) | ![Catalog in dark theme](docs/screenshots/catalog-dark.jpg) |
 
-- Tenant isolation through `X-Tenant-Slug` header + JWT tenant claims.
-- Access token: short-lived API auth.
-- Refresh token: long-lived, stored/revoked through Redis.
-- RBAC matrix:
-  - owner: full tenant control, including creating manager/staff users.
-  - manager: product + inventory write access.
-  - staff: read access and order creation.
-- Product CRUD with Redis response caching.
-- Order creation validates stock, updates inventory, writes order records, then publishes `order.created` event to RabbitMQ.
-- Worker consumes `order.created` and simulates async notification handling.
+## Try it in a minute
 
-### Frontend
-
-- Tenant-aware login/register flow.
-- Dashboard for product management, inventory updates, and order placement.
-- Role-aware UI behavior:
-  - owner/manager: can create products and update inventory.
-  - staff: read-only catalog and inventory controls.
-- Uses API token + tenant slug for all authenticated calls.
-
-## 2. Project Structure
-
-```text
-backend/
-  alembic/
-    versions/
-  app/
-    api/
-    core/
-    db/
-    schemas/
-    services/
-    workers/
-  tests/
-  scripts/
-frontend/
-  src/
-docker-compose.yml
+```bash
+./run_mac.sh
 ```
 
-## 3. Quick Start With Docker
+(Windows: `run_windows.bat`.) The script creates the virtualenv, installs
+dependencies, runs migrations, seeds a demo store and starts both servers.
+Open [http://localhost:5173](http://localhost:5173) and pick a demo role on the
+sign-in screen — no typing needed.
+
+The local run uses SQLite with in-memory stand-ins for Redis and RabbitMQ, so
+nothing else has to be installed. For the full stack:
 
 ```bash
 docker compose up --build
 ```
 
-Services:
+| Service | URL |
+| --- | --- |
+| App | http://localhost:5173 |
+| API docs (OpenAPI) | http://localhost:8000/docs |
+| RabbitMQ console | http://localhost:15672 (guest / guest) |
 
-- Frontend: [http://localhost:5173](http://localhost:5173)
-- Backend API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-- RabbitMQ UI: [http://localhost:15672](http://localhost:15672) (guest / guest)
+### Demo workspace
 
-## 4. Run Without Docker
+`rail-byte` is seeded with 29 products, 5 team members and two months of order
+history generated relative to today, so the charts are always current.
 
-### Backend Local
+| Role | Email | Can |
+| --- | --- | --- |
+| Owner | `owner@railbyte.com` | Everything, including managing the team |
+| Manager | `manager@railbyte.com` | Edit catalog and stock, cancel orders, view team and activity |
+| Staff | `staff@railbyte.com` | Browse, place and fulfil orders |
+
+Password for all three: `StrongPass123!`. Rebuild the demo data any time with
+`python scripts/seed_demo.py --reset` (from `backend/`).
+
+## What it does
+
+- **Overview** — revenue, orders, average order value and units sold, each
+  compared with the previous period; daily trend chart; top products; sales by
+  category; stock health and a restock list.
+- **Orders** — multi-item orders with a point-of-sale style builder, per-store
+  order numbers, and a placed → fulfilled / cancelled lifecycle. Cancelling
+  returns the units to stock.
+- **Catalog** — search, filter and sort; inline stock adjustment; create, edit,
+  archive and delete products with low-stock thresholds.
+- **Team** — invite members, change roles, deactivate accounts.
+- **Activity** — an audit log of every change, grouped by day.
+- **Throughout** — command palette (`⌘K` / `Ctrl K`) that searches products,
+  orders and actions; light and dark themes; responsive down to phone widths;
+  keyboard and screen-reader support.
+
+## How it is built
+
+### Backend (`backend/`)
+
+```text
+app/
+  api/        HTTP layer — routers and auth/role dependencies
+  services/   business rules (orders, inventory, analytics, audit, auth)
+  schemas/    Pydantic request/response models
+  db/         SQLAlchemy models and session
+  core/       config, JWT + password hashing, cache, message publisher
+  workers/    RabbitMQ consumer for order events
+alembic/      migrations
+scripts/      demo seed
+tests/        pytest + httpx integration tests
+```
+
+Decisions worth a look:
+
+- **Tenant isolation, twice.** Every request names its workspace in an
+  `X-Tenant-Slug` header *and* carries a JWT with the tenant claim; a token
+  presented against a different workspace is rejected, and every query filters
+  by `tenant_id`. (`app/api/deps.py`)
+- **Role checks live in the API**, not just the UI: `require_roles(...)` guards
+  each write endpoint, and a token whose role claim no longer matches the
+  database is refused, so a demotion takes effect immediately.
+- **Orders can't oversell.** Placing an order locks the inventory rows
+  (`SELECT … FOR UPDATE`, in a stable order to avoid deadlocks), validates
+  stock, decrements it and writes the order in one transaction. Order numbers
+  come from a per-tenant counter on a locked row. (`app/services/order_service.py`)
+- **Audit entries are atomic.** Each change queues its audit record on the same
+  transaction, so the log can never disagree with the data.
+  (`app/services/audit_service.py`)
+- **Rotating refresh tokens.** Refresh tokens are single-use and tracked in
+  Redis; logging out revokes them.
+- **Read-through cache.** The catalog is cached in Redis and invalidated by
+  anything that changes price or stock — including orders and cancellations.
+- **Async events.** `order.created` is published to RabbitMQ after commit and
+  consumed by a separate worker.
+- **Graceful degradation.** With Redis or RabbitMQ unavailable the app falls
+  back to an in-process cache and skips publishing, which is what makes the
+  zero-dependency local run possible.
+
+### Frontend (`frontend/`)
+
+```text
+src/
+  api/         typed client: tenant headers, token refresh, error mapping
+  hooks/       TanStack Query hooks (queries + mutations), theme
+  context/     auth session
+  components/  ui primitives (button, drawer, toast, …) and SVG charts
+  features/    product drawer, order drawer, cart reducer
+  layout/      app shell, navigation, command palette
+  pages/       one file per route
+  styles/      design tokens + component, layout and page styles
+```
+
+- **Silent session renewal.** A 401 triggers one token refresh shared by every
+  in-flight request, then each request retries once. (`src/api/client.ts`)
+- **Server state with TanStack Query**, keyed by tenant; stock edits update
+  optimistically and roll back on failure.
+- **No UI framework.** Components and charts are hand-built on CSS custom
+  properties; drawers and dialogs use the native `<dialog>` element for focus
+  trapping and Escape handling.
+- **Charts are accessible**: one hue for magnitude, status colours always paired
+  with an icon and label, a keyboard-driven crosshair, and a data table for
+  screen readers.
+- **Same-origin in development** — Vite proxies `/api` to the backend, so there
+  is no CORS setup to get wrong.
+
+## API at a glance
+
+All routes are under `/api/v1` and documented interactively at `/docs`.
+
+| Area | Endpoints |
+| --- | --- |
+| Auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET /auth/me` |
+| Team | `GET /auth/users` · `POST /auth/users` · `PATCH /auth/users/{id}` |
+| Catalog | `GET/POST /products` · `GET/PUT/DELETE /products/{id}` · `GET /products/categories` |
+| Inventory | `GET/PUT /inventory/{product_id}` |
+| Orders | `GET/POST /orders` · `GET /orders/{id}` · `POST /orders/{id}/fulfill` · `POST /orders/{id}/cancel` |
+| Analytics | `GET /analytics/summary?days=30` |
+| Audit | `GET /audit-logs` |
+
+## Running the pieces yourself
 
 ```bash
+# backend
 cd backend
-python -m venv .venv
-.venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env        # then point DATABASE_URL at SQLite or Postgres
 alembic upgrade head
+python scripts/seed_demo.py
 uvicorn app.main:app --reload
 ```
 
-### Seed Demo Data
+For a dependency-free `.env`:
 
-```bash
-cd backend
-python scripts/seed_demo.py
+```ini
+DATABASE_URL=sqlite+aiosqlite:///./dev.db
+REDIS_ENABLED=false
+RABBITMQ_ENABLED=false
+SECRET_KEY=change-me
 ```
 
-Seeded tenant credentials:
-
-- owner: `owner@railbyte.com` / `StrongPass123!`
-- manager: `manager@railbyte.com` / `StrongPass123!`
-- staff: `staff@railbyte.com` / `StrongPass123!`
-
-### Frontend Local
-
 ```bash
+# frontend
 cd frontend
 npm install
 npm run dev
 ```
 
-## 5. Testing
+## Tests
 
-### Backend tests
+```bash
+cd backend && pytest          # API integration tests against SQLite
+cd frontend && npm test       # unit and component tests (Vitest)
+cd frontend && npm run build  # type-check + production build
+```
+
+The backend suite covers tenant isolation, role enforcement, stock
+reservation and restocking, order numbering, analytics maths, the audit log
+and token rotation. The frontend suite covers the API client (including
+concurrent token refresh), the cart reducer, formatters, chart scales and
+component behaviour.
+
+## Migrations
+
+| Revision | Change |
+| --- | --- |
+| `20260422_0001` | Initial schema |
+| `20260422_0002` | Audit log table |
+| `20261114_0003` | Product categories, order numbers and customer names, member names |
 
 ```bash
 cd backend
-pytest
+alembic revision -m "describe the change"
 ```
 
-### Frontend tests
+## Notes
 
-```bash
-cd frontend
-npm test
-```
-
-## 6. Migrations
-
-Current migration chain:
-
-- `20260422_0001`: initial schema
-- `20260422_0002`: adds `audit_logs` table
-
-Create a new migration revision:
-
-```bash
-cd backend
-alembic revision -m "your change name"
-```
-
-## 7. Learning Path
-
-1. Start with auth flow (`/api/v1/auth/*`) and inspect JWT claims.
-2. Create products and inventory records per tenant.
-3. Place orders and verify inventory decreases.
-4. Watch order events flow through RabbitMQ to worker.
-5. Use owner account to create manager/staff via `POST /api/v1/auth/users`.
-6. Verify RBAC boundaries with role-specific logins.
-7. Extend with pagination and audit logs.
-
-## 8. Next Enhancements (Probaly)
-
-- Soft deletes and full audit trail.
-- Background email/Slack notification service.
-- Metrics and tracing (Prometheus/OpenTelemetry).
+- `docker-compose.yml` uses development credentials and a placeholder
+  `SECRET_KEY`; replace them before deploying anywhere real.
+- Analytics are aggregated in Python for portability between SQLite and
+  PostgreSQL. That is fine at demo scale; a production version would push the
+  aggregation into SQL.

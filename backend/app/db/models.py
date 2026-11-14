@@ -37,7 +37,22 @@ class TimestampMixin:
 
 class OrderStatus(StrEnum):
     PLACED = "placed"
+    FULFILLED = "fulfilled"
     CANCELLED = "cancelled"
+
+
+PRODUCT_CATEGORIES: tuple[str, ...] = (
+    "CPU",
+    "GPU",
+    "Memory",
+    "Storage",
+    "Motherboard",
+    "Power",
+    "Cooling",
+    "Case",
+    "Peripherals",
+    "Other",
+)
 
 
 class UserRole(StrEnum):
@@ -60,6 +75,13 @@ class Tenant(Base, TimestampMixin):
         nullable=False,
         unique=True,
         index=True,
+    )
+    # Per-tenant counter used to hand out human-friendly order numbers.
+    order_seq: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1000,
+        server_default="1000",
     )
 
     users: Mapped[list[User]] = relationship(
@@ -96,6 +118,7 @@ class User(Base, TimestampMixin):
         index=True,
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(
         String(20),
@@ -157,6 +180,12 @@ class Product(Base, TimestampMixin):
     sku: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(180), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    category: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        default="Other",
+        server_default="Other",
+    )
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -218,10 +247,21 @@ class Order(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="RESTRICT"),
         index=True,
     )
+    number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    customer_name: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
         default=OrderStatus.PLACED.value,
+        index=True,
     )
     total_amount: Mapped[Decimal] = mapped_column(
         Numeric(10, 2),

@@ -17,6 +17,9 @@ build/
 # Local test databases
 test.db
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # OS/editor
 .DS_Store
 .vscode/
