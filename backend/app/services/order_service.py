@@ -104,6 +104,9 @@ async def _next_order_number(db: AsyncSession, tenant_id: str) -> int:
         select(models.Tenant)
         .where(models.Tenant.id == tenant_id)
         .with_for_update()
+        # The tenant is already in the session (loaded by the auth
+        # dependency); without this the stale counter would be reused.
+        .execution_options(populate_existing=True)
     )
     tenant.order_seq += 1
     return tenant.order_seq
