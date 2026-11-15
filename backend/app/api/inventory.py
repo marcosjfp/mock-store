@@ -29,12 +29,13 @@ async def update_inventory(
     product_id: str,
     payload: InventoryUpdate,
     tenant: Tenant = Depends(get_current_tenant),
-    _user: User = Depends(require_roles("owner", "manager")),
+    user: User = Depends(require_roles("owner", "manager")),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await inventory_service.update_inventory(
         db,
         tenant.id,
+        user.id,
         product_id,
         payload,
     )

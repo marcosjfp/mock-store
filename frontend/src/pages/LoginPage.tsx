@@ -1,104 +1,272 @@
+import { ArrowRight, Boxes, CircleAlert, KeyRound, ShieldCheck, Zap } from "lucide-react";
 import { FormEvent, useState } from "react";
 
-import { login, register } from "../api/client";
-import { getRoleFromAccessToken } from "../auth/jwt";
-import { AuthState } from "../context/AuthContext";
+import { ApiError, Role, login, register } from "../api/client";
+import { formatRoleLabel } from "../auth/roles";
+import { Button } from "../components/ui/Button";
+import { Field } from "../components/ui/Field";
+import { Avatar, Segmented } from "../components/ui/primitives";
+import { useAuth } from "../context/AuthContext";
+import { Logo } from "../layout/Logo";
+import { DEMO_ACCOUNTS, DEMO_PASSWORD, DEMO_TENANT } from "../lib/demo";
+import { slugify } from "../lib/format";
 
-type LoginPageProps = {
-  onAuthenticated: (auth: AuthState) => void;
-};
+type Mode = "signin" | "register";
 
-export default function LoginPage({ onAuthenticated }: LoginPageProps) {
-  const [isRegister, setIsRegister] = useState(true);
-  const [tenantName, setTenantName] = useState("Rail Byte Components");
-  const [tenantSlug, setTenantSlug] = useState("rail-byte");
-  const [email, setEmail] = useState("owner@railbyte.com");
-  const [password, setPassword] = useState("StrongPass123!");
-  const [loading, setLoading] = useState(false);
+const HIGHLIGHTS = [
+  { icon: ShieldCheck, title: "Tenant-isolated by design", text: "Every request is scoped by workspace header and JWT claim." },
+  { icon: KeyRound, title: "Role-based access", text: "Owner, manager and staff see exactly what they can act on." },
+  { icon: Zap, title: "Stock that stays honest", text: "Orders reserve inventory atomically; cancelling returns it." },
+];
+
+export default function LoginPage() {
+  const { signIn, expired } = useAuth();
+  const [mode, setMode] = useState<Mode>("signin");
+  const [tenantName, setTenantName] = useState("");
+  const [tenantSlug, setTenantSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState<"form" | Role | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function authenticate(kind: "form" | Role, run: () => Promise<{ access_token: string; refresh_token: string }>, slug: string) {
     setError(null);
-    setLoading(true);
-
+    setPending(kind);
     try {
-      const tokens = isRegister
-        ? await register({
-            tenant_name: tenantName,
-            tenant_slug: tenantSlug,
-            email,
-            password,
-          })
-        : await login({ tenant_slug: tenantSlug, email, password });
-
-      onAuthenticated({
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        tenantSlug,
-        role: getRoleFromAccessToken(tokens.access_token),
-      });
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Unable to authenticate");
+      const tokens = await run();
+      signIn({ tenantSlug: slug, accessToken: tokens.access_token, refreshToken: tokens.refresh_token });
+    } catch (failure) {
+      const message = failure instanceof ApiError ? failure.message : "Unable to sign in";
+      setError(
+        kind !== "form" && failure instanceof ApiError && failure.status === 401
+          ? "The demo workspace isn’t seeded yet. Run `python scripts/seed_demo.py` in the backend folder."
+          : message,
+      );
     } finally {
-      setLoading(false);
+      setPending(null);
     }
   }
 
-  return (
-    <main className="auth-shell">
-      <section className="auth-panel">
-        <p className="eyebrow">StoreOps Blueprint</p>
-        <h1>Multi-tenant SaaS Trainer</h1>
-        <p className="subtitle">
-          Practice FastAPI + React with realistic tenant-aware auth, CRUD, queueing, and caching.
-        </p>
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const slug = tenantSlug.trim();
+    void authenticate(
+      "form",
+      () =>
+        mode === "register"
+          ? register({
+              tenant_name: tenantName.trim(),
+              tenant_slug: slug,
+              full_name: fullName.trim() || undefined,
+              email: email.trim(),
+              password,
+            })
+          : login({ tenant_slug: slug, email: email.trim(), password }),
+      slug,
+    );
+  }
 
-        <div className="switch-row">
-          <button className={!isRegister ? "ghost" : "active"} onClick={() => setIsRegister(true)} type="button">
-            Register tenant
-          </button>
-          <button className={isRegister ? "ghost" : "active"} onClick={() => setIsRegister(false)} type="button">
-            Log in
-          </button>
+  function demoSignIn(account: (typeof DEMO_ACCOUNTS)[number]) {
+    void authenticate(
+      account.role,
+      () => login({ tenant_slug: DEMO_TENANT, email: account.email, password: DEMO_PASSWORD }),
+      DEMO_TENANT,
+    );
+  }
+
+  return (
+    <div className="auth">
+      <section className="auth-aside" aria-hidden={false}>
+        <div className="auth-brand">
+          <Logo size={32} />
+          <span>StoreOps</span>
         </div>
 
-        <form onSubmit={handleSubmit} className="auth-form">
-          {isRegister && (
-            <label>
-              Tenant name
-              <input value={tenantName} onChange={(event) => setTenantName(event.target.value)} required />
-            </label>
+        <div className="auth-pitch">
+          <h1>Orders and inventory for teams that sell hardware.</h1>
+          <p>
+            A multi-tenant back office: live stock, order fulfilment, sales analytics and a full audit
+            trail — one workspace per store.
+          </p>
+          <ul>
+            {HIGHLIGHTS.map(({ icon: Icon, title, text }) => (
+              <li key={title}>
+                <span className="auth-pitch-icon">
+                  <Icon aria-hidden />
+                </span>
+                <div>
+                  <strong>{title}</strong>
+                  <span>{text}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <p className="auth-stack">
+          <Boxes aria-hidden /> FastAPI · PostgreSQL · Redis · RabbitMQ · React
+        </p>
+      </section>
+
+      <main className="auth-main">
+        <div className="auth-card">
+          <div className="auth-brand auth-brand-mobile">
+            <Logo size={28} />
+            <span>StoreOps</span>
+          </div>
+
+          <h2>{mode === "signin" ? "Sign in to your workspace" : "Create a workspace"}</h2>
+          <p className="auth-lede">
+            {mode === "signin"
+              ? "Use your workspace ID and account, or jump straight into the demo."
+              : "You’ll be the owner and can invite your team afterwards."}
+          </p>
+
+          {expired && !error && (
+            <div className="callout" data-tone="accent" role="status">
+              <CircleAlert />
+              <span>Your session expired. Sign in again to continue.</span>
+            </div>
           )}
 
-          <label>
-            Tenant slug
-            <input value={tenantSlug} onChange={(event) => setTenantSlug(event.target.value)} required />
-          </label>
+          <Segmented
+            label="Authentication mode"
+            value={mode}
+            onChange={(next) => {
+              setMode(next);
+              setError(null);
+            }}
+            options={[
+              { value: "signin", label: "Sign in" },
+              { value: "register", label: "New workspace" },
+            ]}
+          />
 
-          <label>
-            Email
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-          </label>
+          <form className="form-grid" onSubmit={handleSubmit} noValidate={false}>
+            {mode === "register" && (
+              <>
+                <Field label="Store name">
+                  {(control) => (
+                    <input
+                      {...control}
+                      className="input"
+                      value={tenantName}
+                      placeholder="Rail Byte Components"
+                      onChange={(event) => {
+                        setTenantName(event.target.value);
+                        if (!slugEdited) {
+                          setTenantSlug(slugify(event.target.value));
+                        }
+                      }}
+                      minLength={2}
+                      maxLength={120}
+                      required
+                    />
+                  )}
+                </Field>
+                <Field label="Your name">
+                  {(control) => (
+                    <input
+                      {...control}
+                      className="input"
+                      value={fullName}
+                      autoComplete="name"
+                      onChange={(event) => setFullName(event.target.value)}
+                      maxLength={120}
+                    />
+                  )}
+                </Field>
+              </>
+            )}
 
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              minLength={8}
-              required
-            />
-          </label>
+            <Field
+              label="Workspace ID"
+              hint={mode === "register" ? "Lowercase letters, numbers and dashes. Your team signs in with this." : undefined}
+            >
+              {(control) => (
+                <input
+                  {...control}
+                  className="input mono"
+                  value={tenantSlug}
+                  placeholder="rail-byte"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setSlugEdited(true);
+                    setTenantSlug(event.target.value.toLowerCase());
+                  }}
+                  pattern="[a-z0-9\-]+"
+                  minLength={2}
+                  maxLength={80}
+                  required
+                />
+              )}
+            </Field>
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Working..." : isRegister ? "Create tenant" : "Sign in"}
-          </button>
+            <Field label="Email">
+              {(control) => (
+                <input
+                  {...control}
+                  className="input"
+                  type="email"
+                  value={email}
+                  autoComplete="email"
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                />
+              )}
+            </Field>
 
-          {error && <p className="error-text">{error}</p>}
-        </form>
-      </section>
-    </main>
+            <Field label="Password" hint={mode === "register" ? "At least 8 characters." : undefined}>
+              {(control) => (
+                <input
+                  {...control}
+                  className="input"
+                  type="password"
+                  value={password}
+                  autoComplete={mode === "register" ? "new-password" : "current-password"}
+                  onChange={(event) => setPassword(event.target.value)}
+                  minLength={8}
+                  required
+                />
+              )}
+            </Field>
+
+            {error && (
+              <div className="callout" data-tone="critical" role="alert">
+                <CircleAlert />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <Button type="submit" variant="primary" size="lg" block loading={pending === "form"} disabled={pending !== null}>
+              {mode === "signin" ? "Sign in" : "Create workspace"}
+            </Button>
+          </form>
+
+          <div className="auth-demo">
+            <div className="auth-divider">
+              <span>or explore the demo store as</span>
+            </div>
+            <ul>
+              {DEMO_ACCOUNTS.map((account) => (
+                <li key={account.role}>
+                  <button type="button" disabled={pending !== null} onClick={() => demoSignIn(account)}>
+                    <Avatar name={account.name} />
+                    <span>
+                      <strong>{formatRoleLabel(account.role)}</strong>
+                      <span>{account.blurb}</span>
+                    </span>
+                    {pending === account.role ? <span className="spinner" aria-hidden /> : <ArrowRight aria-hidden />}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }

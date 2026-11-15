@@ -20,7 +20,17 @@ def create_app() -> FastAPI:
         await publisher.disconnect()
         await cache_client.disconnect()
 
-    app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version="1.0.0",
+        description=(
+            "Multi-tenant order and inventory API. Every request is scoped to a "
+            "workspace through the `X-Tenant-Slug` header and a JWT carrying the "
+            "matching tenant claim; write access is gated by role "
+            "(owner, manager, staff)."
+        ),
+        lifespan=lifespan,
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -30,7 +40,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/health")
+    @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 

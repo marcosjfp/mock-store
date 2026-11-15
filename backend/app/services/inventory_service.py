@@ -2,9 +2,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import cache_client
 from app.db import models
 from app.schemas.inventory import InventoryUpdate
+from app.services import audit_service
+from app.services.product_service import invalidate_catalog_cache
 
 
 def _serialize_inventory(record: models.Inventory) -> dict:
@@ -17,11 +18,11 @@ def _serialize_inventory(record: models.Inventory) -> dict:
     }
 
 
-async def get_inventory_by_product(
+async def _get_product_or_404(
     db: AsyncSession,
     tenant_id: str,
     product_id: str,
-) -> dict:
+) -> models.Product:
     product = await db.scalar(
         select(models.Product).where(
             models.Product.id == product_id,
@@ -33,6 +34,15 @@ async def get_inventory_by_product(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found",
         )
+    return product
+
+
+async def get_inventory_by_product(
+    db: AsyncSession,
+    tenant_id: str,
+    product_id: str,
+) -> dict:
+    await _get_product_or_404(db, tenant_id, product_id)
 
     inventory = await db.scalar(
         select(models.Inventory).where(
@@ -58,40 +68,64 @@ async def get_inventory_by_product(
 async def update_inventory(
     db: AsyncSession,
     tenant_id: str,
+    actor_user_id: str,
     product_id: str,
     payload: InventoryUpdate,
 ) -> dict:
+    product = await _get_product_or_404(db, tenant_id, product_id)
+
     inventory = await db.scalar(
-        select(models.Inventory).where(
+        select(models.Inventory)
+        .where(
             models.Inventory.tenant_id == tenant_id,
             models.Inventory.product_id == product_id,
         )
+        .with_for_update()
     )
-
     if inventory is None:
-        product = await db.scalar(
-            select(models.Product).where(
-                models.Product.id == product_id,
-                models.Product.tenant_id == tenant_id,
-            )
+        inventory = models.Inventory(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            quantity=0,
+            reorder_level=0,
         )
-        if product is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found",
-            )
-        inventory = models.Inventory(tenant_id=tenant_id, product_id=product_id)
         db.add(inventory)
 
+    previous_quantity = inventory.quantity
+    previous_reorder = inventory.reorder_level
     inventory.quantity = payload.quantity
     inventory.reorder_level = payload.reorder_level
 
+    if (previous_quantity, previous_reorder) != (
+        payload.quantity,
+        payload.reorder_level,
+    ):
+        delta = payload.quantity - previous_quantity
+        if delta:
+            summary = (
+                f"Adjusted stock for {product.name}: "
+                f"{previous_quantity} → {payload.quantity}"
+            )
+        else:
+            summary = (
+                f"Changed reorder point for {product.name} to "
+                f"{payload.reorder_level}"
+            )
+        audit_service.record(
+            db,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            event_type="inventory.adjusted",
+            resource_type="inventory",
+            resource_id=product_id,
+            summary=summary,
+            delta=delta,
+            quantity=payload.quantity,
+            reorder_level=payload.reorder_level,
+        )
+
     await db.commit()
     await db.refresh(inventory)
-
-    await cache_client.delete_pattern(f"tenant:{tenant_id}:products*")
-    await cache_client.delete_pattern(
-        f"tenant:{tenant_id}:product:{product_id}"
-    )
+    await invalidate_catalog_cache(tenant_id, [product_id])
 
     return _serialize_inventory(inventory)

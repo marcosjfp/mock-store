@@ -90,6 +90,8 @@ if [[ "$run_apps" == true ]]; then
   (
     cd "$ROOT_DIR/backend"
     "$VENV_PYTHON" -m alembic upgrade head
+    echo "[setup] Seeding demo workspace (skipped if it already has data)..."
+    "$VENV_PYTHON" scripts/seed_demo.py
   )
 
   echo "[run] Starting backend..."
