@@ -113,7 +113,8 @@ async def test_owner_manages_team_and_deactivation_locks_out(client: AsyncClient
         headers={"X-Tenant-Slug": owner["X-Tenant-Slug"]},
         json={"email": staff_email(owner), "password": PASSWORD},
     )
-    assert login.status_code == 403
+    # Indistinguishable from a wrong password, so accounts can't be probed.
+    assert login.status_code == 401
 
 
 async def test_me_returns_workspace_and_logout_revokes_refresh(client: AsyncClient):

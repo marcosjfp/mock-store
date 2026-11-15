@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -16,6 +17,8 @@ _ORDER_LOADERS = (
     selectinload(models.Order.items).selectinload(models.OrderItem.product),
     selectinload(models.Order.created_by),
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_item(item: models.OrderItem) -> dict:
@@ -218,16 +221,20 @@ async def create_order(
     await invalidate_catalog_cache(tenant_id, product_ids)
 
     created = await get_order(db, tenant_id, order.id)
-    await publisher.publish_order_created(
-        {
-            "event": "order.created",
-            "tenant_id": tenant_id,
-            "order_id": order.id,
-            "order_number": order.number,
-            "created_by_user_id": user_id,
-            "total_amount": float(total),
-        }
-    )
+    # The order is already committed; a broker outage must not fail the request.
+    try:
+        await publisher.publish_order_created(
+            {
+                "event": "order.created",
+                "tenant_id": tenant_id,
+                "order_id": order.id,
+                "order_number": order.number,
+                "created_by_user_id": user_id,
+                "total_amount": float(total),
+            }
+        )
+    except Exception:
+        logger.exception("Failed to publish order.created for order %s", order.id)
     return created
 
 

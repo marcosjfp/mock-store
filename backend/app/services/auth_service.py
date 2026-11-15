@@ -76,17 +76,15 @@ async def authenticate_user(
     )
     user = await db.scalar(stmt)
 
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.hashed_password)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account has been deactivated",
-        )
-
     return tenant, user
 
 
